@@ -121,9 +121,9 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     input_ids = features["input_ids"]
     input_mask = features["input_mask"]
     segment_ids = features["segment_ids"]
-    masked_lm_positions = features["masked_lm_positions"]
-    masked_lm_ids = features["masked_lm_ids"]
-    masked_lm_weights = features["masked_lm_weights"]
+    masked_lm_positions = features["masked_lm_positions"]  #  mlm任务中mask的token位置
+    masked_lm_ids = features["masked_lm_ids"]  # mlm任务中mask的token id
+    masked_lm_weights = features["masked_lm_weights"]  # mlm任务中mask的token weights
     next_sentence_labels = features["next_sentence_labels"]
 
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
@@ -138,7 +138,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
 
     (masked_lm_loss,
      masked_lm_example_loss, masked_lm_log_probs) = get_masked_lm_output(
-         bert_config, model.get_sequence_output(), model.get_embedding_table(),
+         bert_config, model.get_sequence_output(), model.get_embedding_table(),  # model.get_sequence_output()是最后一层的输出，包括CLS、SEP；model.get_embedding_table()是token word embedding
          masked_lm_positions, masked_lm_ids, masked_lm_weights)
 
     (next_sentence_loss, next_sentence_example_loss,
@@ -240,7 +240,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
 def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
                          label_ids, label_weights):
   """Get loss and log probs for the masked LM."""
-  input_tensor = gather_indexes(input_tensor, positions)
+  input_tensor = gather_indexes(input_tensor, positions)  # [B*masked_token_num, hidden_dim]
 
   with tf.variable_scope("cls/predictions"):
     # We apply one more non-linear transformation before the output layer.
@@ -262,19 +262,19 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
         initializer=tf.zeros_initializer())
     logits = tf.matmul(input_tensor, output_weights, transpose_b=True)
     logits = tf.nn.bias_add(logits, output_bias)
-    log_probs = tf.nn.log_softmax(logits, axis=-1)
+    log_probs = tf.nn.log_softmax(logits, axis=-1)  # [B*masked_token_num, vocab_size]
 
-    label_ids = tf.reshape(label_ids, [-1])
-    label_weights = tf.reshape(label_weights, [-1])
+    label_ids = tf.reshape(label_ids, [-1])  # [B*masked_token_num], masked token ids
+    label_weights = tf.reshape(label_weights, [-1])  # [B*masked_token_num], masked token weights to indicate whether token is padding (0.0) or not (1.0).
 
     one_hot_labels = tf.one_hot(
-        label_ids, depth=bert_config.vocab_size, dtype=tf.float32)
+        label_ids, depth=bert_config.vocab_size, dtype=tf.float32) # [B*masked_token_num, vocab_size]
 
     # The `positions` tensor might be zero-padded (if the sequence is too
     # short to have the maximum number of predictions). The `label_weights`
     # tensor has a value of 1.0 for every real prediction and 0.0 for the
     # padding predictions.
-    per_example_loss = -tf.reduce_sum(log_probs * one_hot_labels, axis=[-1])
+    per_example_loss = -tf.reduce_sum(log_probs * one_hot_labels, axis=[-1])  # [B*masked_token_num]
     numerator = tf.reduce_sum(label_weights * per_example_loss)
     denominator = tf.reduce_sum(label_weights) + 1e-5
     loss = numerator / denominator
@@ -307,6 +307,8 @@ def get_next_sentence_output(bert_config, input_tensor, labels):
 
 def gather_indexes(sequence_tensor, positions):
   """Gathers the vectors at the specific positions over a minibatch."""
+  # sequence_tensor, [B, seq_len, hidden_dim]，bert最后一层输出
+  # positions, [B, masked_token_num]
   sequence_shape = modeling.get_shape_list(sequence_tensor, expected_rank=3)
   batch_size = sequence_shape[0]
   seq_length = sequence_shape[1]
@@ -314,10 +316,10 @@ def gather_indexes(sequence_tensor, positions):
 
   flat_offsets = tf.reshape(
       tf.range(0, batch_size, dtype=tf.int32) * seq_length, [-1, 1])
-  flat_positions = tf.reshape(positions + flat_offsets, [-1])
+  flat_positions = tf.reshape(positions + flat_offsets, [-1])  # 为了下面展开后一次性查找
   flat_sequence_tensor = tf.reshape(sequence_tensor,
                                     [batch_size * seq_length, width])
-  output_tensor = tf.gather(flat_sequence_tensor, flat_positions)
+  output_tensor = tf.gather(flat_sequence_tensor, flat_positions)  # [B*mask_token_num, hidden_dim]
   return output_tensor
 
 
